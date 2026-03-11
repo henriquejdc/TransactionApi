@@ -1,0 +1,41 @@
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "--cov=app --cov-report=term-missing --cov-report=html --cov-fail-under=100 -v"
+
+[tool.black]
+line-length = 100
+target-version = ["py38"]
+extend-exclude = '''
+/(
+    \.venv
+  | htmlcov
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 100
+skip = [".venv", "htmlcov"]
+skip_glob = [".venv/*", "htmlcov/*"]
+known_first_party = ["app"]
+
+[tool.coverage.run]
+source = ["app"]
+omit = [
+    "app/workers/consumer.py",   # standalone script, covered via integration
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "def __repr__",
+    "raise NotImplementedError",
+    "setup_logging()",
+    "logger = get_logger",
+    "settings = get_settings()",
+]
