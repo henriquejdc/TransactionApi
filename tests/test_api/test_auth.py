@@ -2,8 +2,10 @@ import uuid
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from fastapi.security import HTTPAuthorizationCredentials
 from httpx import ASGITransport, AsyncClient
 
+from app.api.deps.auth import require_auth
 from app.core.config import get_settings
 from app.main import app
 from app.models import KindEnum
@@ -60,3 +62,31 @@ class TestAuthLogin:
             )
 
         assert response.status_code == 201
+
+    async def test_protected_route_with_non_bearer_scheme_returns_401(self):
+        payload = {
+            "external_id": str(uuid.uuid4()),
+            "amount": "10.00",
+            "kind": KindEnum.CREDIT,
+        }
+
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+            headers={"Authorization": "Basic abc123"},
+        ) as client:
+            response = await client.post(TRANSACTION_URL, json=payload)
+
+        assert response.status_code == 401
+        assert response.json()["detail"] == "Not authenticated"
+
+    async def test_require_auth_allows_configured_static_token(self):
+        settings = get_settings()
+        credentials = HTTPAuthorizationCredentials(
+            scheme="Bearer",
+            credentials=settings.API_AUTH_TOKEN,
+        )
+
+        result = await require_auth(credentials=credentials, settings=settings)
+
+        assert result is None
