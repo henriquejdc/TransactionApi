@@ -13,4 +13,4 @@ build/
 htmlcov/
 .pytest_cache/
 *.log
-
+.idea
