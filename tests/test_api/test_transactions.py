@@ -3,7 +3,9 @@ from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 
+from app.main import app
 from app.models import KindEnum, StatusEnum
 
 pytestmark = pytest.mark.asyncio
@@ -13,6 +15,36 @@ BALANCE_URL = "/api/v1/transaction/balance"
 
 
 class TestCreateTransactionEndpoint:
+    async def test_requires_authentication(self):
+        payload = {
+            "external_id": str(uuid.uuid4()),
+            "amount": "10.00",
+            "kind": KindEnum.CREDIT,
+        }
+
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(TRANSACTION_URL, json=payload)
+
+        assert response.status_code == 401
+        assert response.json()["detail"] == "Not authenticated"
+
+    async def test_rejects_invalid_token(self):
+        payload = {
+            "external_id": str(uuid.uuid4()),
+            "amount": "10.00",
+            "kind": KindEnum.CREDIT,
+        }
+
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+            headers={"Authorization": "Bearer invalid-token"},
+        ) as client:
+            response = await client.post(TRANSACTION_URL, json=payload)
+
+        assert response.status_code == 401
+        assert response.json()["detail"] == "Invalid authentication credentials"
+
     async def test_create_credit_returns_201(self, http_client, mock_publisher):
         partner_tx_id = str(uuid.uuid4())
         with patch(

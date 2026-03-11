@@ -94,6 +94,9 @@ Crie um arquivo `.env` na raiz do projeto (opcional para execução com Docker):
 APP_ENV=development
 LOG_LEVEL=INFO
 SECRET_KEY=change-me-in-production
+API_AUTH_USERNAME=admin
+API_AUTH_PASSWORD=admin
+API_AUTH_TOKEN_EXPIRE_SECONDS=3600
 
 # Banco de dados
 DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/transactions_db
@@ -173,9 +176,40 @@ python -m app.workers.consumer
 
 ## Endpoints da API
 
+### `POST /api/v1/auth/login`
+
+Realiza autenticação técnica e retorna um token Bearer para uso nas rotas protegidas.
+
+**Request body:**
+```json
+{
+  "username": "admin",
+  "password": "admin"
+}
+```
+
+**Response body (200):**
+```json
+{
+  "access_token": "token-assinado",
+  "token_type": "bearer",
+  "expires_in": 3600
+}
+```
+
+Use o token retornado no header `Authorization`:
+
+```http
+Authorization: Bearer <access_token>
+```
+
+---
+
 ### `POST /api/v1/transaction`
 
 Cria uma nova transação financeira.
+
+**Autenticação:** requer Bearer token.
 
 **Request body:**
 ```json
@@ -221,6 +255,8 @@ Cria uma nova transação financeira.
 ### `GET /api/v1/transaction/balance`
 
 Retorna o saldo consolidado de todas as transações processadas.
+
+**Autenticação:** requer Bearer token.
 
 **Response body (200):**
 ```json

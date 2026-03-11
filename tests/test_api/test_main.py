@@ -4,11 +4,27 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from app.core.config import get_settings
 from app.core.exceptions import PartnerUnavailableError, TransactionAlreadyProcessedError
 from app.main import app, duplicate_transaction_handler, partner_unavailable_handler
 from app.models import KindEnum
 
 pytestmark = pytest.mark.asyncio
+
+
+async def get_auth_headers() -> dict[str, str]:
+    settings = get_settings()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/v1/auth/login",
+            json={
+                "username": settings.API_AUTH_USERNAME,
+                "password": settings.API_AUTH_PASSWORD,
+            },
+        )
+
+    assert response.status_code == 200
+    return {"Authorization": f"Bearer {response.json()['access_token']}"}
 
 
 class TestLifespan:
@@ -87,7 +103,9 @@ class TestGlobalExceptionHandlers:
         with patch.object(TransactionService, "create_transaction", new=mock_create):
             app.dependency_overrides[get_db] = override_get_db
             async with AsyncClient(
-                transport=ASGITransport(app=app), base_url="http://test"
+                transport=ASGITransport(app=app),
+                base_url="http://test",
+                headers=await get_auth_headers(),
             ) as client:
                 response = await client.post(
                     "/api/v1/transaction",
@@ -111,7 +129,9 @@ class TestGlobalExceptionHandlers:
         with patch.object(TransactionService, "create_transaction", new=mock_create):
             app.dependency_overrides[get_db] = override_get_db
             async with AsyncClient(
-                transport=ASGITransport(app=app), base_url="http://test"
+                transport=ASGITransport(app=app),
+                base_url="http://test",
+                headers=await get_auth_headers(),
             ) as client:
                 response = await client.post(
                     "/api/v1/transaction",

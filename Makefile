@@ -1,6 +1,8 @@
 .PHONY: help build up down down-v restart logs logs-worker test test-no-cov coverage format lint migrate migration shell \
         clean ps worker api
 
+BIN ?= .venv/bin/python -m
+
 help:
 	@echo ""
 	@echo "  Transaction API — available commands"
@@ -65,18 +67,18 @@ test:
 	.venv/bin/python -m pytest tests/ -v
 
 coverage:
-	.venv/bin/python -m pytest tests/ --cov=app --cov-report=term-missing -v
+	@$(BIN) pytest tests/ --cov-config=pyproject.toml --cov=app --cov-report=term-missing -v
 
 test-no-cov:
 	.venv/bin/python -m pytest tests/ -v --no-cov
 
 format:
-	.venv/bin/python -m isort .
-	.venv/bin/python -m black .
+	@$(BIN) isort --profile black --line-length=100 --skip .venv --skip htmlcov .
+	@$(BIN) black --line-length=100 --target-version=py38 --exclude .venv .
 
 lint:
-	.venv/bin/python -m isort --check-only .
-	.venv/bin/python -m black --check .
+	@$(BIN) isort --profile black --line-length=100 --skip .venv --skip htmlcov --check-only .
+	@$(BIN) black --line-length=100 --target-version=py38 --exclude .venv --check .
 
 shell:
 	docker compose exec api sh

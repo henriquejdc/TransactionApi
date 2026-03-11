@@ -9,6 +9,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
+from app.core.config import get_settings
 from app.db.session import Base, get_db
 from app.main import app
 from app.models.transaction import KindEnum, StatusEnum, Transaction
@@ -53,21 +54,6 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
             await conn.rollback()
 
 
-@pytest_asyncio.fixture()
-async def http_client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
-    """HTTP test client with the DB dependency overridden to use the test session."""
-
-    async def override_get_db():
-        yield db_session
-
-    app.dependency_overrides[get_db] = override_get_db
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        yield client
-
-    app.dependency_overrides.clear()
-
-
 @pytest.fixture()
 def mock_publisher():
     """Mock the RabbitMQ publisher so tests never touch RabbitMQ."""
@@ -109,3 +95,43 @@ def sample_transaction(db_session: AsyncSession) -> Transaction:
         kind=KindEnum.CREDIT,
         status=StatusEnum.PENDING,
     )
+
+
+@pytest.fixture()
+def auth_credentials() -> dict[str, str]:
+    settings = get_settings()
+    return {
+        "username": settings.API_AUTH_USERNAME,
+        "password": settings.API_AUTH_PASSWORD,
+    }
+
+
+@pytest_asyncio.fixture()
+async def auth_headers(auth_credentials: dict[str, str]) -> dict[str, str]:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/api/v1/auth/login", json=auth_credentials)
+
+    assert response.status_code == 200
+    access_token = response.json()["access_token"]
+    return {"Authorization": f"Bearer {access_token}"}
+
+
+@pytest_asyncio.fixture()
+async def http_client(
+    db_session: AsyncSession, auth_headers: dict[str, str]
+) -> AsyncGenerator[AsyncClient, None]:
+    """HTTP test client with the DB dependency overridden to use the test session."""
+
+    async def override_get_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_get_db
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://test",
+        headers=auth_headers,
+    ) as client:
+        yield client
+
+    app.dependency_overrides.clear()
