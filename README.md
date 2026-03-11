@@ -1,186 +1,186 @@
 # Transaction API
 
-API assíncrona de processamento de transações financeiras construída com **FastAPI**, **PostgreSQL**, **RabbitMQ** e integração com parceiro bancário externo.
+API assíncrona para processamento de transações financeiras com **FastAPI**, **PostgreSQL**, **RabbitMQ** e integração com parceiro bancário externo.
 
----
+## Sumário
 
-## 📋 Sumário
-
-- [Visão Geral](#visão-geral)
+- [Visão geral](#visão-geral)
 - [Arquitetura](#arquitetura)
 - [Tecnologias](#tecnologias)
 - [Pré-requisitos](#pré-requisitos)
-- [Configuração de Ambiente](#configuração-de-ambiente)
-- [Como Executar](#como-executar)
-  - [Com Docker Compose (recomendado)](#com-docker-compose-recomendado)
-  - [Localmente (sem Docker)](#localmente-sem-docker)
-- [Endpoints da API](#endpoints-da-api)
-- [Fluxo de Processamento](#fluxo-de-processamento)
-- [Estrutura do Projeto](#estrutura-do-projeto)
-- [Testes](#testes)
-- [Migrações de Banco de Dados](#migrações-de-banco-de-dados)
+- [Configuração](#configuração)
+- [Execução](#execução)
+  - [Com Docker Compose](#com-docker-compose)
+  - [Localmente](#localmente)
+- [Autenticação](#autenticação)
+- [Endpoints](#endpoints)
+- [Fluxo de processamento](#fluxo-de-processamento)
+- [Comandos úteis](#comandos-úteis)
+- [Testes e cobertura](#testes-e-cobertura)
+- [Migrações](#migrações)
+- [Estrutura do projeto](#estrutura-do-projeto)
 
----
+## Visão geral
 
-## Visão Geral
+A API recebe requisições de criação de transações de **crédito** e **débito**, garante **idempotência** por `external_id`, consulta um parceiro bancário externo, persiste o resultado no banco e publica um evento assíncrono no RabbitMQ.
 
-A Transaction API recebe requisições de criação de transações financeiras (crédito/débito), garante **idempotência** via `external_id`, integra-se sincronamente com um **parceiro bancário**, persiste o resultado no banco de dados e publica eventos de forma assíncrona no **RabbitMQ**.
+As rotas de transação são protegidas por autenticação Bearer. O acesso pode ser feito com:
 
----
+- token emitido pelo endpoint de login `POST /api/v1/auth/login`; ou
+- token técnico fixo configurado em `API_AUTH_TOKEN`.
 
 ## Arquitetura
 
+```text
+Cliente
+  │
+  ├── POST /api/v1/auth/login
+  │       └── retorna Bearer token
+  │
+  └── POST /api/v1/transaction
+          GET /api/v1/transaction/balance
+                  │
+                  ▼
+             FastAPI API
+                  │
+      ┌───────────┼───────────┐
+      │           │           │
+      ▼           ▼           ▼
+ PostgreSQL   Partner API   RabbitMQ
+(idempotência, (HTTP)       (publicação
+ persistência)               de eventos)
 ```
-┌─────────────┐     POST /api/v1/transaction      ┌───────────────────┐
-│   Client    │ ────────────────────────────────▶ │    FastAPI (API)  │
-└─────────────┘                                   └────────┬──────────┘
-                                                           │
-                                        ┌──────────────────┼──────────────────┐
-                                        │                  │                  │
-                                  Idempotency         Partner Bank       RabbitMQ
-                                   Check (DB)          (HTTP)           (Publisher)
-                                        │                  │                  │
-                                   PostgreSQL        partner-mock      transactions
-                                                                          .exchange
-                                                                              │
-                                                                       ┌──────▼──────┐
-                                                                       │   Worker    │
-                                                                       │ (Consumer)  │
-                                                                       └─────────────┘
-```
 
-### Serviços Docker
+### Serviços no `docker compose`
 
-| Serviço          | Descrição                                  | Porta       |
-|------------------|--------------------------------------------|-------------|
-| `api`            | FastAPI — API principal                    | `8000`      |
-| `worker`         | Consumer RabbitMQ (processamento de eventos)| —          |
-| `postgres`       | Banco de dados PostgreSQL 16               | `5432`      |
-| `rabbitmq`       | Message broker com management UI          | `5672` / `15672` |
-| `partner-mock`   | Simulação do parceiro bancário externo     | `8001`      |
-
----
+| Serviço | Descrição | Porta |
+|---|---|---:|
+| `api` | API FastAPI principal | `8000` |
+| `worker` | Consumer RabbitMQ | — |
+| `postgres` | PostgreSQL | `5432` |
+| `rabbitmq` | Broker + Management UI | `5672` / `15672` |
+| `partner-mock` | Mock do parceiro externo | `8001` |
 
 ## Tecnologias
 
-| Tecnologia            | Versão    | Uso                                 |
-|-----------------------|-----------|-------------------------------------|
-| Python                | 3.11+     | Linguagem principal                 |
-| FastAPI               | 0.115.6   | Framework web assíncrono            |
-| SQLAlchemy (asyncio)  | 2.0.37    | ORM assíncrono                      |
-| asyncpg               | 0.30.0    | Driver PostgreSQL assíncrono        |
-| Alembic               | 1.14.0    | Migrações de banco de dados         |
-| aio-pika              | 9.5.4     | Cliente RabbitMQ assíncrono         |
-| httpx                 | 0.28.1    | Cliente HTTP assíncrono             |
-| Pydantic v2           | 2.10.4    | Validação de dados e schemas        |
-| pydantic-settings     | 2.7.1     | Gerenciamento de configurações      |
-| Docker / Compose      | —         | Containerização e orquestração      |
-
----
+- Python 3.11+
+- FastAPI
+- SQLAlchemy asyncio
+- PostgreSQL + `asyncpg`
+- Alembic
+- RabbitMQ + `aio-pika`
+- `httpx`
+- Pydantic v2
+- Pytest / Pytest Asyncio / Pytest Cov
+- Black + isort
+- Docker / Docker Compose
 
 ## Pré-requisitos
 
-- [Docker](https://docs.docker.com/get-docker/) e [Docker Compose](https://docs.docker.com/compose/)
-- **ou** Python 3.11+, PostgreSQL e RabbitMQ (para execução local)
+Você pode rodar o projeto de duas formas:
 
----
+- com **Docker Compose**; ou
+- localmente com **Python 3.11+**, **PostgreSQL** e **RabbitMQ**.
 
-## Configuração de Ambiente
+## Configuração
 
-Crie um arquivo `.env` na raiz do projeto (opcional para execução com Docker):
+Crie um arquivo `.env` na raiz do projeto:
 
 ```env
-# Aplicação
 APP_ENV=development
 LOG_LEVEL=INFO
 SECRET_KEY=change-me-in-production
+
+DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/transactions_db
+RABBITMQ_URL=amqp://guest:guest@localhost:5672/
+PARTNER_API_URL=http://localhost:8001
+PARTNER_API_TIMEOUT=10.0
+
 API_AUTH_USERNAME=admin
 API_AUTH_PASSWORD=admin
 API_AUTH_TOKEN_EXPIRE_SECONDS=3600
-
-# Banco de dados
-DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/transactions_db
-
-# RabbitMQ
-RABBITMQ_URL=amqp://guest:guest@localhost:5672/
-
-# Parceiro bancário
-PARTNER_API_URL=http://localhost:8001
-PARTNER_API_TIMEOUT=10.0
+API_AUTH_TOKEN=dev-token
 ```
 
-> **Nota:** Em produção, sempre substitua `SECRET_KEY` por um valor seguro.
+### Variáveis de autenticação
 
----
+| Variável | Descrição |
+|---|---|
+| `API_AUTH_USERNAME` | Usuário técnico aceito no login |
+| `API_AUTH_PASSWORD` | Senha técnica aceita no login |
+| `API_AUTH_TOKEN_EXPIRE_SECONDS` | Tempo de expiração do token emitido no login |
+| `API_AUTH_TOKEN` | Token fixo alternativo aceito nas rotas protegidas |
+| `SECRET_KEY` | Chave usada para assinar os tokens emitidos |
 
-## Como Executar
+> Em produção, altere `SECRET_KEY`, `API_AUTH_PASSWORD` e `API_AUTH_TOKEN` para valores seguros.
 
-### Com Docker Compose (recomendado)
+## Execução
+
+### Com Docker Compose
 
 ```bash
-# Subir todos os serviços (API, Worker, PostgreSQL, RabbitMQ, Partner Mock)
 docker compose up --build
+```
 
-# Em segundo plano
+Para subir em background:
+
+```bash
 docker compose up --build -d
+```
 
-# Verificar logs
+Para ver logs:
+
+```bash
 docker compose logs -f api
 docker compose logs -f worker
-
-# Derrubar os serviços
-docker compose down
-
-# Derrubar e remover volumes (apaga dados do banco)
-docker compose down -v
 ```
 
-Após subir, os seguintes recursos estarão disponíveis:
-
-| Recurso              | URL                                  |
-|----------------------|--------------------------------------|
-| API (Swagger UI)     | http://localhost:8000/docs           |
-| API (ReDoc)          | http://localhost:8000/redoc          |
-| Health Check         | http://localhost:8000/health         |
-| RabbitMQ Management  | http://localhost:15672 (guest/guest) |
-| Partner Mock         | http://localhost:8001/docs           |
-
----
-
-### Localmente (sem Docker)
-
-> Requer PostgreSQL e RabbitMQ rodando localmente.
+Para derrubar os serviços:
 
 ```bash
-# 1. Criar e ativar ambiente virtual
+docker compose down
+```
+
+Recursos disponíveis após subir a stack:
+
+| Recurso | URL |
+|---|---|
+| Swagger UI | http://localhost:8000/docs |
+| ReDoc | http://localhost:8000/redoc |
+| Health check | http://localhost:8000/health |
+| RabbitMQ Management | http://localhost:15672 |
+| Partner Mock | http://localhost:8001/docs |
+
+### Localmente
+
+```bash
 python -m venv .venv
 source .venv/bin/activate
-
-# 2. Instalar dependências
 pip install -r requirements.txt
-
-# 3. Configurar variáveis de ambiente
-cp .env.example .env  # ou criar o .env manualmente
-
-# 4. Executar migrações
 alembic upgrade head
-
-# 5. Subir a API
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
 
-# 6. (Opcional) Subir o worker em outro terminal
+Para subir o worker em outro terminal:
+
+```bash
 python -m app.workers.consumer
 ```
 
----
+## Autenticação
 
-## Endpoints da API
+A autenticação das rotas de transação é Bearer.
 
-### `POST /api/v1/auth/login`
+### 1. Fazer login
 
-Realiza autenticação técnica e retorna um token Bearer para uso nas rotas protegidas.
+Endpoint:
 
-**Request body:**
+```text
+POST /api/v1/auth/login
+```
+
+Payload:
+
 ```json
 {
   "username": "admin",
@@ -188,7 +188,8 @@ Realiza autenticação técnica e retorna um token Bearer para uso nas rotas pro
 }
 ```
 
-**Response body (200):**
+Resposta esperada:
+
 ```json
 {
   "access_token": "token-assinado",
@@ -197,21 +198,46 @@ Realiza autenticação técnica e retorna um token Bearer para uso nas rotas pro
 }
 ```
 
-Use o token retornado no header `Authorization`:
+### 2. Usar o token retornado
+
+Envie o token no header `Authorization`:
 
 ```http
 Authorization: Bearer <access_token>
 ```
 
----
+### 3. Alternativa para desenvolvimento
+
+Além do token emitido no login, a API também aceita diretamente o valor configurado em `API_AUTH_TOKEN`.
+
+Exemplo:
+
+```http
+Authorization: Bearer dev-token
+```
+
+### Erros comuns de autenticação
+
+| Status | Situação | Resposta |
+|---|---|---|
+| `401` | Sem header `Authorization` | `Not authenticated` |
+| `401` | Usuário/senha inválidos no login | `Invalid username or password` |
+| `401` | Token inválido ou expirado | `Invalid authentication credentials` |
+
+## Endpoints
+
+### `POST /api/v1/auth/login`
+
+Autentica o usuário técnico e retorna um token Bearer.
 
 ### `POST /api/v1/transaction`
 
-Cria uma nova transação financeira.
+Cria uma nova transação.
 
-**Autenticação:** requer Bearer token.
+**Requer autenticação Bearer.**
 
-**Request body:**
+Exemplo de payload:
+
 ```json
 {
   "external_id": "550e8400-e29b-41d4-a716-446655440000",
@@ -220,45 +246,30 @@ Cria uma nova transação financeira.
 }
 ```
 
-| Campo         | Tipo     | Descrição                                         |
-|---------------|----------|---------------------------------------------------|
-| `external_id` | `UUID`   | Identificador único fornecido pelo cliente        |
-| `amount`      | `Decimal`| Valor da transação (deve ser maior que zero)      |
-| `kind`        | `string` | Tipo da transação: `credit` ou `debit`            |
+| Campo | Tipo | Descrição |
+|---|---|---|
+| `external_id` | `UUID` | Identificador único do cliente |
+| `amount` | `Decimal` | Valor da transação, maior que zero |
+| `kind` | `string` | `credit` ou `debit` |
 
-**Respostas:**
+Possíveis respostas:
 
-| Status | Descrição                                                   |
-|--------|-------------------------------------------------------------|
-| `201`  | Transação criada e processada com sucesso                   |
-| `409`  | Conflito — `external_id` já foi processado (idempotência)  |
-| `503`  | Parceiro bancário indisponível                              |
-| `422`  | Dados de entrada inválidos                                  |
-
-**Response body (201):**
-```json
-{
-  "id": "uuid",
-  "external_id": "uuid",
-  "amount": "100.50",
-  "kind": "credit",
-  "status": "processed",
-  "partner_transaction_id": "uuid-do-parceiro",
-  "partner_response": { "status": "approved", "transaction_id": "..." },
-  "created_at": "2026-03-10T10:00:00Z",
-  "updated_at": "2026-03-10T10:00:00Z"
-}
-```
-
----
+| Status | Descrição |
+|---|---|
+| `201` | Transação criada com sucesso |
+| `401` | Não autenticado / token inválido |
+| `409` | `external_id` já processado |
+| `422` | Payload inválido |
+| `503` | Parceiro indisponível |
 
 ### `GET /api/v1/transaction/balance`
 
-Retorna o saldo consolidado de todas as transações processadas.
+Retorna o saldo consolidado.
 
-**Autenticação:** requer Bearer token.
+**Requer autenticação Bearer.**
 
-**Response body (200):**
+Resposta:
+
 ```json
 {
   "total_credit": "500.00",
@@ -267,147 +278,182 @@ Retorna o saldo consolidado de todas as transações processadas.
 }
 ```
 
----
-
 ### `GET /health`
 
-Verificação de saúde da API.
+Health check da aplicação.
+
+Resposta:
 
 ```json
-{ "status": "ok" }
+{
+  "status": "ok"
+}
 ```
 
----
+## Fluxo de processamento
 
-## Fluxo de Processamento
-
-```
-1. Recebe requisição POST /api/v1/transaction
-       │
-2. Verifica idempotência (external_id no banco)
-       │── duplicado ──▶ 409 Conflict
-       │
-3. Persiste transação com status PENDING
-       │
-4. Chama parceiro bancário (POST /authorize)
-       │── erro ──▶ atualiza status para FAILED ──▶ 503 Service Unavailable
-       │
-5. Atualiza transação para status PROCESSED
-       │
-6. Publica evento no RabbitMQ (fire-and-forget)
-       │  exchange: transactions.exchange
-       │  routing key: transaction.created
-       │
-7. Retorna TransactionResponse (201)
+```text
+1. Cliente envia POST /api/v1/transaction
+2. API valida autenticação Bearer
+3. API valida payload
+4. Serviço verifica idempotência por external_id
+5. Transação é persistida inicialmente
+6. API consulta o parceiro externo
+7. Status da transação é atualizado
+8. Evento é publicado no RabbitMQ
+9. API retorna a resposta ao cliente
 ```
 
-### Dead Letter Queue (DLQ)
+## Comandos úteis
 
-Mensagens que não puderem ser processadas pelo consumer (NACK ou TTL expirado) são roteadas automaticamente para a `transactions.dlq` via `transactions.dlx`.
+O projeto possui atalhos no `Makefile`:
 
----
-
-## Estrutura do Projeto
-
-```
-TransactionApiProject/
-├── app/
-│   ├── api/
-│   │   └── v1/
-│   │       └── routes/
-│   │           └── transactions.py   # Endpoints REST
-│   ├── core/
-│   │   ├── config.py                 # Configurações via pydantic-settings
-│   │   ├── exceptions.py             # Exceções de domínio
-│   │   └── logging.py                # Configuração de logs
-│   ├── db/
-│   │   └── session.py                # Engine e sessão SQLAlchemy
-│   ├── models/
-│   │   └── transaction.py            # ORM model Transaction
-│   ├── repositories/
-│   │   └── transaction_repository.py # Acesso ao banco de dados
-│   ├── schemas/
-│   │   └── transaction.py            # Pydantic schemas (request/response)
-│   ├── services/
-│   │   ├── partner_client.py         # Client HTTP para o parceiro bancário
-│   │   └── transaction_service.py    # Lógica de negócio principal
-│   ├── workers/
-│   │   ├── consumer.py               # Consumer RabbitMQ (worker standalone)
-│   │   └── publisher.py              # Publisher RabbitMQ (fire-and-forget)
-│   └── main.py                       # Entrypoint FastAPI
-├── migrations/                       # Migrações Alembic
-├── tests/
-│   ├── conftest.py                   # Fixtures compartilhadas (SQLite in-memory)
-│   ├── test_api/                     # Testes de integração dos endpoints
-│   ├── test_repositories/            # Testes do repositório
-│   ├── test_services/                # Testes dos serviços
-│   └── test_workers/                 # Testes dos workers
-├── partner_mock.py                   # Simulação do parceiro bancário
-├── docker-compose.yml
-├── Dockerfile
-├── alembic.ini
-├── pyproject.toml
-└── requirements.txt
+```bash
+make help
 ```
 
----
+### Desenvolvimento
 
-## Testes
+```bash
+make format
+make lint
+make clean
+```
 
-Os testes utilizam **SQLite in-memory** (via `aiosqlite`) e mocks para RabbitMQ e parceiro bancário — nenhum serviço externo é necessário.
+- `make format`: aplica `isort` e `black`
+- `make lint`: valida `isort` e `black` sem alterar arquivos
+- `make clean`: remove `__pycache__` e arquivos `.pyc`
 
-### Comandos via Makefile
+### Docker
+
+```bash
+make build
+make up
+make down
+make down-v
+make restart
+make ps
+make logs
+make logs-worker
+```
+
+### Banco de dados
+
+```bash
+make migrate
+make migration m='minha_mensagem'
+```
+
+### Testes
 
 ```bash
 make test
 make coverage
 make test-no-cov
-make format
-make lint
 ```
 
-- `make test`: executa toda a suíte com as configurações padrão do projeto.
-- `make coverage`: executa os testes com relatório de cobertura em terminal.
-- `make test-no-cov`: executa os testes sem exigir cobertura.
-- `make format`: aplica formatação automática com `isort` e `black`.
-- `make lint`: valida formatação e organização de imports sem alterar arquivos.
+## Testes e cobertura
 
-### Comandos diretos com pytest
+A suíte cobre:
 
-```bash
-# Instalar dependências de desenvolvimento
-pip install -r requirements.txt
+- autenticação e login;
+- acesso com token às rotas protegidas;
+- criação de transações de crédito e débito;
+- idempotência por `external_id`;
+- tratamento de indisponibilidade do parceiro;
+- endpoint de saldo;
+- health check;
+- ciclo de startup/shutdown (`lifespan`) da aplicação.
 
-# Executar todos os testes com cobertura
-pytest
+Observações:
 
-# Executar sem relatório de cobertura
-pytest --no-cov
+- o `pytest` está configurado no `pyproject.toml`;
+- a cobertura mínima atual está definida no próprio `pytest` via `--cov-fail-under=100`.
 
-# Executar um módulo específico
-pytest tests/test_api/
+## Migrações
 
-# Gerar relatório HTML de cobertura
-pytest --cov-report=html
-# Abrir: htmlcov/index.html
-```
-
-A cobertura mínima exigida é **100%** (configurada em `pyproject.toml`).
-
----
-
-## Migrações de Banco de Dados
+Aplicar migrações:
 
 ```bash
-# Aplicar todas as migrações pendentes
 alembic upgrade head
+```
 
-# Criar nova migração (após alterar models)
-alembic revision --autogenerate -m "descrição da migração"
+Gerar nova migration:
 
-# Verificar status atual
-alembic current
+```bash
+alembic revision --autogenerate -m "descricao"
+```
 
-# Reverter última migração
-alembic downgrade -1
+Se estiver usando Docker, prefira:
+
+```bash
+make migrate
+make migration m='descricao'
+```
+
+## Estrutura do projeto
+
+```text
+TransactionApiProject/
+├── app/
+│   ├── api/
+│   │   ├── deps/
+│   │   │   └── auth.py
+│   │   └── v1/
+│   │       ├── __init__.py
+│   │       └── routes/
+│   │           ├── auth.py
+│   │           └── transactions.py
+│   ├── core/
+│   │   ├── config.py
+│   │   ├── exceptions.py
+│   │   └── logging.py
+│   ├── db/
+│   │   └── session.py
+│   ├── models/
+│   │   └── transaction.py
+│   ├── repositories/
+│   │   └── transaction_repository.py
+│   ├── schemas/
+│   │   ├── auth.py
+│   │   └── transaction.py
+│   ├── services/
+│   │   ├── auth_service.py
+│   │   ├── partner_client.py
+│   │   └── transaction_service.py
+│   ├── workers/
+│   └── main.py
+├── migrations/
+├── tests/
+├── docker-compose.yml
+├── Dockerfile
+├── Makefile
+├── pyproject.toml
+└── requirements.txt
+```
+
+## Exemplo rápido de uso
+
+1. Faça login:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"admin"}'
+```
+
+2. Use o token retornado para criar uma transação:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/transaction \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer SEU_TOKEN' \
+  -d '{"external_id":"550e8400-e29b-41d4-a716-446655440000","amount":"100.50","kind":"credit"}'
+```
+
+3. Consulte o saldo:
+
+```bash
+curl http://localhost:8000/api/v1/transaction/balance \
+  -H 'Authorization: Bearer SEU_TOKEN'
 ```
