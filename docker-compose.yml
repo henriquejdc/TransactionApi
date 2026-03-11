@@ -1,0 +1,103 @@
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: transaction_postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: transactions_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: transaction_rabbitmq
+    ports:
+      - "5672:5672"    # AMQP
+      - "15672:15672"  # Management UI  →  http://localhost:15672 (guest/guest)
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  partner-mock:
+    image: python:3.11-slim
+    container_name: transaction_partner_mock
+    working_dir: /app
+    volumes:
+      - ./partner_mock.py:/app/partner_mock.py
+    command: >
+      sh -c "pip install fastapi uvicorn -q &&
+             uvicorn partner_mock:app --host 0.0.0.0 --port 8001"
+    ports:
+      - "8001:8001"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8001/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: transaction_api
+    environment:
+      APP_ENV: production
+      LOG_LEVEL: INFO
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/transactions_db
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      PARTNER_API_URL: http://partner-mock:8001
+      PARTNER_API_TIMEOUT: "10.0"
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      partner-mock:
+        condition: service_healthy
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: transaction_worker
+    environment:
+      APP_ENV: production
+      LOG_LEVEL: INFO
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/transactions_db
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      PARTNER_API_URL: http://partner-mock:8001
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    command: ["python", "-m", "app.workers.consumer"]
+    restart: on-failure
+
+volumes:
+  postgres_data:
+
